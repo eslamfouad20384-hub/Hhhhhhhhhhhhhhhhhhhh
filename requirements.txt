@@ -3,7 +3,4 @@ pandas
 numpy
 requests
 ccxt
-pandas_ta==0.3.14b0
 scikit-learn
-streamlit-autorefresh
-PyGithub
