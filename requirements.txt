@@ -1,7 +1,6 @@
 streamlit
 pandas
 numpy
-requests
 ccxt
+requests
 scikit-learn
-pandas_ta==0.3.14b0
