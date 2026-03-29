@@ -4,3 +4,4 @@ numpy
 requests
 ccxt
 scikit-learn
+pandas_ta==0.3.14b0
