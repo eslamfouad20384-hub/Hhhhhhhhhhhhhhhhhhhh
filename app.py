@@ -29,16 +29,35 @@ def get_data(coin_id):
         return None
 
 # ==============================
-# Indicators
+# RSI + Divergence
 # ==============================
-def rsi(df, period=14):
+def rsi_and_divergence(df, period=14):
     delta = df["close"].diff()
+
     gain = (delta.where(delta > 0, 0)).rolling(period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1 + rs))
-    return df
 
+    # نحط نافذة صغيرة للتحليل
+    window = df.tail(10)
+
+    # Simple divergence logic
+    price_start = window["close"].iloc[0]
+    price_end = window["close"].iloc[-1]
+
+    rsi_start = window["rsi"].iloc[0]
+    rsi_end = window["rsi"].iloc[-1]
+
+    bullish_div = (price_end < price_start) and (rsi_end > rsi_start)
+    bearish_div = (price_end > price_start) and (rsi_end < rsi_start)
+
+    return df, bullish_div, bearish_div
+
+# ==============================
+# Indicators
+# ==============================
 def ma(df, period):
     df[f"ma{period}"] = df["close"].rolling(period).mean()
     return df
@@ -65,7 +84,8 @@ def analyze_coin(coin):
     if df is None or len(df) < 60:
         return None
 
-    df = rsi(df)
+    df, bullish_div, bearish_div = rsi_and_divergence(df)
+
     df = ma(df, 50)
     df = ma(df, 200)
     df = macd(df)
@@ -77,14 +97,8 @@ def analyze_coin(coin):
     ma50 = last["ma50"]
     ma200 = last["ma200"]
 
-    # ==========================
-    # Trend Filter (Swing مهم جداً)
-    # ==========================
     uptrend = ma50 > ma200
 
-    # ==========================
-    # Pullback + Reversal
-    # ==========================
     oversold_pullback = last["rsi"] < 45
     macd_turn = last["macd"] > last["signal"]
     price_reclaim = price > ma50
@@ -93,26 +107,27 @@ def analyze_coin(coin):
 
     signal = "HOLD"
 
-    if swing_buy:
-        signal = "SWING BUY 🔥"
-
-    # ==========================
-    # Swing Targets
-    # ==========================
-    target1 = ma50
-    target2 = last["bb_mid"]
-    target3 = last["bb_upper"]
-
-    stop_loss = ma200  # حماية قوية
-
-    # ==========================
-    # Strength Score
-    # ==========================
     score = 0
     score += 1 if uptrend else 0
     score += 1 if macd_turn else 0
     score += 1 if oversold_pullback else 0
     score += 1 if price_reclaim else 0
+
+    # 🔥 RSI Divergence Boost
+    if bullish_div:
+        score += 2
+
+    if swing_buy:
+        signal = "SWING BUY 🔥"
+
+    if bullish_div and uptrend:
+        signal = "STRONG SWING BUY 🔥🔥"
+
+    target1 = ma50
+    target2 = last["bb_mid"]
+    target3 = last["bb_upper"]
+
+    stop_loss = ma200
 
     return {
         "coin": coin,
@@ -121,6 +136,8 @@ def analyze_coin(coin):
         "trend": "UP" if uptrend else "DOWN",
         "signal": signal,
         "score": score,
+        "bullish_div": bullish_div,
+        "bearish_div": bearish_div,
         "target1": target1,
         "target2": target2,
         "target3": target3,
@@ -128,15 +145,23 @@ def analyze_coin(coin):
     }
 
 # ==============================
-# Coins
+# TOP 100 COINS
 # ==============================
 def get_symbols():
-    return [
-        "bitcoin","ethereum","binancecoin","ripple","solana",
-        "dogecoin","cardano","chainlink","avalanche-2","matic-network",
-        "litecoin","polkadot","tron","near","aptos","arbitrum",
-        "optimism","render-token","injective","kaspa","sei-network"
-    ]
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+
+    params = {
+        "vs_currency": "usd",
+        "order": "market_cap_desc",
+        "per_page": 100,
+        "page": 1,
+        "sparkline": False
+    }
+
+    r = requests.get(url, timeout=10, params=params)
+    data = r.json()
+
+    return [coin["id"] for coin in data]
 
 # ==============================
 # Run
@@ -149,7 +174,7 @@ if st.button("🚀 Start Swing Scan"):
         output = executor.map(analyze_coin, coins)
 
     for r in output:
-        if r and r["signal"] == "SWING BUY 🔥":
+        if r:
             results.append(r)
 
     df = pd.DataFrame(results)
@@ -158,6 +183,6 @@ if st.button("🚀 Start Swing Scan"):
         df = df.sort_values("score", ascending=False)
         st.dataframe(df)
     else:
-        st.warning("No swing setups right now")
+        st.warning("No data")
 
     st.success("Done ✅")
