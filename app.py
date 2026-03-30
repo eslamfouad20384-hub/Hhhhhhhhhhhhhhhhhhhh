@@ -1,56 +1,87 @@
+import streamlit as st
+import requests
 import pandas as pd
 import numpy as np
 
 # =========================
-# 1️⃣ تنظيف البيانات
+# 📊 جلب البيانات من Binance
 # =========================
-def clean_binance_data(raw_data):
-    cols = [
-        "time","open","high","low","close","volume",
-        "close_time","qav","trades","tb_base","tb_quote","ignore"
-    ]
+def get_data():
+    url = "https://api.binance.com/api/v3/klines"
 
-    df = pd.DataFrame(raw_data, columns=cols)
+    params = {
+        "symbol": "BTCUSDT",
+        "interval": "1h",
+        "limit": 100
+    }
 
-    for c in ["open","high","low","close","volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json",
+        "Connection": "keep-alive"
+    }
 
-    df.dropna(inplace=True)
-    df["time"] = pd.to_datetime(df["time"], unit="ms")
-    df.sort_values("time", inplace=True)
-    df.reset_index(drop=True, inplace=True)
+    try:
+        res = requests.get(url, params=params, headers=headers, timeout=10)
+        data = res.json()
 
-    return df
+        if not isinstance(data, list):
+            print("API Error:", data)
+            return pd.DataFrame()
+
+        if len(data) == 0:
+            print("Empty data from Binance")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data, columns=[
+            "time","open","high","low","close","volume",
+            "close_time","quote_asset_volume","trades",
+            "taker_buy_base","taker_buy_quote","ignore"
+        ])
+
+        for col in ["open","high","low","close","volume"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df.dropna(inplace=True)
+
+        df["time"] = pd.to_datetime(df["time"], unit="ms")
+        df.sort_values("time", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+        return df
+
+    except Exception as e:
+        print("Request Failed:", str(e))
+        return pd.DataFrame()
 
 
 # =========================
-# 2️⃣ RSI
+# 📈 Indicators
 # =========================
 def rsi(series, period=14):
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
 
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
 
-# =========================
-# 3️⃣ MACD
-# =========================
 def macd(series):
-    ema12 = series.ewm(span=12, adjust=False).mean()
-    ema26 = series.ewm(span=26, adjust=False).mean()
+    ema12 = series.ewm(span=12).mean()
+    ema26 = series.ewm(span=26).mean()
     macd_line = ema12 - ema26
-    signal = macd_line.ewm(span=9, adjust=False).mean()
-    hist = macd_line - signal
-    return macd_line, signal, hist
+    signal = macd_line.ewm(span=9).mean()
+    return macd_line, signal
 
 
 # =========================
-# 4️⃣ تحليل سكالبينج برو
+# 🧠 تحليل سكالبينج برو
 # =========================
-def scalping_analyze(df):
+def analyze(df):
+    if df.empty:
+        return None
+
     close = df["close"]
     high = df["high"]
     low = df["low"]
@@ -59,82 +90,94 @@ def scalping_analyze(df):
 
     # Indicators
     df["rsi"] = rsi(close)
-    macd_line, macd_signal, macd_hist = macd(close)
+    macd_line, macd_signal = macd(close)
 
     rsi_val = df["rsi"].iloc[-1]
     macd_val = macd_line.iloc[-1]
     macd_sig = macd_signal.iloc[-1]
 
-    # Trend EMA
+    # Trend
     ema20 = close.ewm(span=20).mean().iloc[-1]
     ema50 = close.ewm(span=50).mean().iloc[-1]
 
     trend = "UP" if ema20 > ema50 else "DOWN"
 
-    # Support / Resistance (ديناميكي سكالبينج)
+    # Support / Resistance
     support = low.tail(20).min()
     resistance = high.tail(20).max()
 
-    # Volatility
-    atr = (high - low).rolling(14).mean().iloc[-1]
-
-    # =========================
-    # 5️⃣ SCORE SYSTEM
-    # =========================
+    # Score system
     score = 50
 
-    # RSI rules
     if rsi_val < 30:
         score += 20
     elif rsi_val > 70:
         score -= 20
 
-    # MACD rules
     if macd_val > macd_sig:
         score += 15
     else:
         score -= 15
 
-    # Trend rules
     if trend == "UP":
         score += 15
     else:
         score -= 15
 
-    # Position rules
-    if price <= support * 1.01:
-        score += 10
-    if price >= resistance * 0.99:
-        score -= 10
-
-    # clamp
     score = max(0, min(100, score))
 
-    # =========================
-    # 6️⃣ Signal
-    # =========================
+    # Signal
     if score >= 75:
-        signal = "BUY 🚀 (Scalp Long)"
+        signal = "BUY 🚀"
     elif score <= 35:
-        signal = "SELL 🔻 (Scalp Short)"
+        signal = "SELL 🔻"
     else:
         signal = "WAIT ⏳"
 
     # Targets
-    target1 = price + atr
-    target2 = price + (atr * 2)
-    stop_loss = price - atr
+    atr = (high - low).rolling(14).mean().iloc[-1]
 
     return {
         "price": price,
+        "rsi": rsi_val,
+        "trend": trend,
         "support": support,
         "resistance": resistance,
-        "rsi": rsi_val,
-        "macd": macd_val,
-        "trend": trend,
         "score": score,
         "signal": signal,
-        "target1": target1,
-        "target2": target2,
-        "stop_loss": stop_loss
+        "target1": price + atr,
+        "target2": price + (atr * 2),
+        "stop_loss": price - atr
     }
+
+
+# =========================
+# 🚀 Streamlit UI
+# =========================
+st.set_page_config(page_title="Scalping Bot PRO", layout="wide")
+st.title("🚀 Crypto Scalping Bot PRO (Binance)")
+
+if st.button("🔥 Scan BTC"):
+    df = get_data()
+
+    if df.empty:
+        st.error("❌ No data from Binance API")
+        st.stop()
+
+    result = analyze(df)
+
+    if result:
+        st.success("✅ Analysis Ready")
+
+        st.write("### 💰 Price:", result["price"])
+        st.write("### 📊 RSI:", result["rsi"])
+        st.write("### 📈 Trend:", result["trend"])
+        st.write("### 🎯 Support:", result["support"])
+        st.write("### 🎯 Resistance:", result["resistance"])
+        st.write("### 🧠 Score:", result["score"])
+        st.write("### 📢 Signal:", result["signal"])
+
+        st.write("### 🎯 Targets")
+        st.write("TP1:", result["target1"])
+        st.write("TP2:", result["target2"])
+        st.write("SL:", result["stop_loss"])
