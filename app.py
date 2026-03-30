@@ -7,14 +7,14 @@ import requests
 # UI
 # ==========================
 st.set_page_config(layout="wide")
-st.title("🚀 Bitcoin Analyzer PRO (Stable)")
+st.title("🚀 Bitcoin Analyzer PRO MAX")
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "1h"
 LIMIT = 100
 
 # ==========================
-# جلب البيانات (Stable API)
+# Get Data (Stable)
 # ==========================
 def get_data():
     try:
@@ -26,7 +26,11 @@ def get_data():
             "limit": LIMIT
         }
 
-        res = requests.get(url, params=params, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        res = requests.get(url, params=params, headers=headers, timeout=10)
 
         if res.status_code != 200:
             return pd.DataFrame()
@@ -43,11 +47,7 @@ def get_data():
 
         df = df[["open","high","low","close","volume"]]
 
-        df["open"] = df["open"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["close"] = df["close"].astype(float)
-        df["volume"] = df["volume"].astype(float)
+        df = df.astype(float)
 
         return df
 
@@ -69,30 +69,29 @@ def rsi(df, period=14):
 
 
 # ==========================
-# دعم ومقاومة (Pivot)
+# Support / Resistance
 # ==========================
-def find_levels(df):
+def support_resistance(df):
     highs = df["high"]
     lows = df["low"]
 
-    resistance = []
-    support = []
-
     window = 5
+    pivots_high = []
+    pivots_low = []
 
     for i in range(window, len(df) - window):
         if highs[i] == max(highs[i-window:i+window]):
-            resistance.append(highs[i])
+            pivots_high.append(highs[i])
 
         if lows[i] == min(lows[i-window:i+window]):
-            support.append(lows[i])
+            pivots_low.append(lows[i])
 
     def cluster(levels):
         if len(levels) == 0:
             return []
 
         levels = sorted(levels)
-        clusters = []
+        clusters = [levels[0]]
         temp = [levels[0]]
 
         for p in levels[1:]:
@@ -105,34 +104,33 @@ def find_levels(df):
         clusters.append(np.mean(temp))
         return clusters
 
-    return cluster(support), cluster(resistance)
+    return cluster(pivots_low), cluster(pivots_high)
 
 
 # ==========================
-# تحليل
+# Analysis Engine
 # ==========================
 def analyze(df):
 
-    # 🚨 حماية من الفشل
+    # 🚨 حماية كاملة
     if df is None or df.empty or len(df) < 20:
         return None
 
     df["RSI"] = rsi(df)
 
     price = df["close"].iloc[-1]
+    rsi_now = df["RSI"].iloc[-1]
 
-    support, resistance = find_levels(df)
+    support, resistance = support_resistance(df)
 
     nearest_support = max([s for s in support if s < price], default=None)
     nearest_resistance = min([r for r in resistance if r > price], default=None)
-
-    rsi_now = df["RSI"].iloc[-1]
 
     signal = "HOLD"
     reasons = []
 
     # ==========================
-    # إشارات
+    # إشارات قوية
     # ==========================
     if rsi_now < 30:
         signal = "BUY"
@@ -144,7 +142,7 @@ def analyze(df):
 
     if nearest_support and price <= nearest_support * 1.01:
         signal = "BUY"
-        reasons.append("Near Support")
+        reasons.append("Near Support Zone")
 
     if nearest_resistance and price >= nearest_resistance:
         signal = "BREAKOUT / SELL"
@@ -159,8 +157,8 @@ def analyze(df):
     stop_loss = nearest_support * 0.98 if nearest_support else price * 0.95
 
     return {
-        "Price": price,
-        "RSI": rsi_now,
+        "Price": round(price, 2),
+        "RSI": round(rsi_now, 2),
         "Support": nearest_support,
         "Resistance": nearest_resistance,
         "Target1": target1,
@@ -172,19 +170,19 @@ def analyze(df):
 
 
 # ==========================
-# تشغيل
+# Run
 # ==========================
 df = get_data()
 
 if df.empty:
-    st.error("❌ No data from Binance API. Try again.")
+    st.error("❌ No data from Binance API")
     st.stop()
 
 if st.button("🔍 Analyze BTC"):
     result = analyze(df)
 
     if result is None:
-        st.warning("⚠️ Not enough data to analyze")
+        st.warning("⚠️ Not enough data for analysis")
     else:
-        st.subheader("📊 Analysis Result")
-        st.write(result)
+        st.success("🔥 Analysis Ready")
+        st.json(result)
