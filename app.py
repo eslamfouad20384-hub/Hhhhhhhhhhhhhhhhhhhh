@@ -2,15 +2,16 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import time
 
 # ==============================
-# UI
+# إعداد الصفحة
 # ==============================
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO")
+st.title("🚀 Smart Crypto Scanner PRO (Stable Version)")
 
 # ==============================
-# APIs
+# API Sources
 # ==============================
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
 CRYPTOCOMPARE_URL = "https://min-api.cryptocompare.com/data/v2/histohour"
@@ -18,7 +19,7 @@ CRYPTOCOMPARE_URL = "https://min-api.cryptocompare.com/data/v2/histohour"
 TOP_COINS = 100
 
 # ==============================
-# Cache Coins
+# Cache (مهم جدًا)
 # ==============================
 @st.cache_data(ttl=300)
 def get_top_coins():
@@ -42,7 +43,7 @@ def get_top_coins():
         return []
 
 # ==============================
-# Price Data
+# جلب البيانات (مع حماية قوية)
 # ==============================
 def fetch_crypto_data(symbol):
     try:
@@ -62,7 +63,10 @@ def fetch_crypto_data(symbol):
         if not isinstance(data, dict):
             return None
 
-        if "Data" not in data or "Data" not in data["Data"]:
+        if "Data" not in data:
+            return None
+
+        if "Data" not in data["Data"]:
             return None
 
         df = pd.DataFrame(data["Data"]["Data"])
@@ -76,7 +80,7 @@ def fetch_crypto_data(symbol):
         return None
 
 # ==============================
-# Indicators
+# مؤشرات
 # ==============================
 def add_indicators(df):
     # RSI
@@ -92,68 +96,40 @@ def add_indicators(df):
     df["MACD"] = df["EMA12"] - df["EMA26"]
     df["Signal"] = df["MACD"].ewm(span=9).mean()
 
-    # MA Trend
+    # MA
     df["MA100"] = df["close"].rolling(100).mean()
 
     return df
 
 # ==============================
-# RSI Divergence (Real)
-# ==============================
-def detect_rsi_divergence(df):
-    if len(df) < 30:
-        return False
-
-    price_low1 = df["close"].iloc[-20:-10].min()
-    price_low2 = df["close"].iloc[-10:].min()
-
-    rsi_low1 = df["RSI"].iloc[-20:-10].min()
-    rsi_low2 = df["RSI"].iloc[-10:].min()
-
-    # Bullish divergence
-    if price_low2 < price_low1 and rsi_low2 > rsi_low1:
-        return True
-
-    return False
-
-# ==============================
-# AI Analysis Engine
+# تحليل العملة
 # ==============================
 def analyze(symbol):
     df = fetch_crypto_data(symbol)
 
-    if df is None or len(df) < 60:
+    if df is None or not isinstance(df, pd.DataFrame):
+        return None
+
+    if len(df) < 60:
         return None
 
     df = add_indicators(df)
 
     price = df["close"].iloc[-1]
-
     score = 0
     reasons = []
 
-    # ==========================
     # RSI
-    # ==========================
-    rsi = df["RSI"].iloc[-1]
-
-    if rsi < 30:
-        score += 3
+    if df["RSI"].iloc[-1] < 30:
+        score += 2
         reasons.append("RSI Oversold")
-    elif rsi < 40:
-        score += 1
-        reasons.append("RSI Weak Zone")
 
-    # ==========================
     # MACD
-    # ==========================
     if df["MACD"].iloc[-1] > df["Signal"].iloc[-1]:
         score += 2
-        reasons.append("MACD Bullish Cross")
+        reasons.append("MACD Bullish")
 
-    # ==========================
     # Volume Spike
-    # ==========================
     try:
         avg_vol = df["volumeto"].rolling(20).mean().iloc[-1]
         if df["volumeto"].iloc[-1] > avg_vol * 1.5:
@@ -162,26 +138,12 @@ def analyze(symbol):
     except:
         pass
 
-    # ==========================
-    # Trend Filter
-    # ==========================
-    try:
-        if price > df["MA100"].iloc[-1]:
-            score += 1
-            reasons.append("Above MA100")
-    except:
-        pass
+    # MA filter
+    if price > df["MA100"].iloc[-1]:
+        score += 1
+        reasons.append("Above MA100")
 
-    # ==========================
-    # RSI Divergence (Strong)
-    # ==========================
-    if detect_rsi_divergence(df):
-        score += 4
-        reasons.append("🔥 RSI Divergence")
-
-    # ==========================
-    # Drop Filter
-    # ==========================
+    # Drop filter
     try:
         change = (price - df["close"].iloc[-24]) / df["close"].iloc[-24] * 100
         if change > -5:
@@ -189,16 +151,13 @@ def analyze(symbol):
     except:
         return None
 
-    # ==========================
-    # Final Decision
-    # ==========================
-    if score >= 5:
+    if score >= 4:
         return {
             "Symbol": symbol,
             "Score": score,
-            "Entry": round(price, 6),
-            "Target": round(price * 1.06, 6),
-            "Stop": round(price * 0.97, 6),
+            "Entry": round(price, 5),
+            "Target": round(price * 1.05, 5),
+            "Stop": round(price * 0.97, 5),
             "Reasons": ", ".join(reasons)
         }
 
@@ -211,7 +170,7 @@ def run_scan():
     coins = get_top_coins()
 
     if not coins:
-        st.error("❌ Error loading coins")
+        st.error("❌ مشكلة في جلب العملات")
         return
 
     results = []
@@ -231,15 +190,15 @@ def run_scan():
         df = pd.DataFrame(results)
         df = df.sort_values("Score", ascending=False)
 
-        st.success(f"🔥 Found {len(df)} opportunities")
+        st.success(f"🔥 تم العثور على {len(df)} فرصة")
 
         st.dataframe(df, use_container_width=True)
     else:
-        st.warning("❌ No strong setups right now")
+        st.warning("❌ مفيش فرص حالياً")
 
 # ==============================
-# Run Button
+# زر التشغيل
 # ==============================
-if st.button("🔍 Scan Market"):
-    with st.spinner("Analyzing market..."):
+if st.button("🔍 Scan Now"):
+    with st.spinner("جارى التحليل..."):
         run_scan()
