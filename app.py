@@ -11,7 +11,7 @@ st.title("🚀 Bitcoin Smart Analyzer PRO")
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "1h"
-LIMIT = 500
+LIMIT = 50
 
 # ==========================
 # جلب البيانات من Binance
