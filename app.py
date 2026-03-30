@@ -1,3 +1,4 @@
+import streamlit as st
 import requests
 import pandas as pd
 import random
@@ -25,13 +26,10 @@ def create_session():
 
 
 # =========================
-# 🌍 Proxy Rotation (اختياري)
+# 🌍 Proxy Rotation
 # =========================
 PROXIES = [
-    None,  # بدون بروكسي (أساسي)
-    # لو عندك proxies ضيفها هنا:
-    # "http://user:pass@ip:port",
-    # "http://ip:port",
+    None,
 ]
 
 def get_proxy():
@@ -42,14 +40,14 @@ def get_proxy():
 
 
 # =========================
-# 🚀 Binance Primary API
+# 🚀 Binance API
 # =========================
-def fetch_binance(session):
+def fetch_binance(session, symbol, interval):
     url = "https://api.binance.com/api/v3/klines"
 
     params = {
-        "symbol": "BTCUSDT",
-        "interval": "1h",
+        "symbol": symbol,
+        "interval": interval,
         "limit": 100
     }
 
@@ -81,18 +79,14 @@ def fetch_binance(session):
 
 
 # =========================
-# 🔄 Fallback API (Coinbase)
+# 🔄 Fallback API
 # =========================
 def fetch_coinbase():
     url = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
-    params = {
-        "granularity": 3600
-    }
+    params = {"granularity": 3600}
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
         res = requests.get(url, params=params, headers=headers, timeout=10)
@@ -108,13 +102,12 @@ def fetch_coinbase():
 
 
 # =========================
-# 📊 Unified Data Loader
+# 📊 Unified Loader
 # =========================
-def get_data():
+def get_data(symbol, interval):
     session = create_session()
 
-    # 1️⃣ Binance
-    data = fetch_binance(session)
+    data = fetch_binance(session, symbol, interval)
 
     if data:
         df = pd.DataFrame(data, columns=[
@@ -131,7 +124,7 @@ def get_data():
 
         return df
 
-    # 2️⃣ Fallback Coinbase
+    # fallback (اختياري ثابت BTC فقط)
     data = fetch_coinbase()
 
     if data:
@@ -143,5 +136,44 @@ def get_data():
 
         return df
 
-    # 3️⃣ Fail safe
     return pd.DataFrame()
+
+
+# =========================
+# 📊 Analysis
+# =========================
+def analyze(df):
+    price = df["close"].iloc[-1]
+    support = df["low"].tail(20).min()
+    resistance = df["high"].tail(20).max()
+
+    return price, support, resistance
+
+
+# =========================
+# 🚀 UI
+# =========================
+st.set_page_config(page_title="Crypto Pro Scanner", layout="wide")
+st.title("🚀 Crypto Pro Scanner")
+
+symbol = st.text_input("💰 العملة", "BTCUSDT")
+interval = st.selectbox("⏱ الفريم", ["1m","5m","15m","1h","4h","1d"])
+
+# زر البحث
+if st.button("🔍 بحث وتحليل"):
+
+    df = get_data(symbol, interval)
+
+    if df.empty:
+        st.error("❌ No data from API")
+        st.stop()
+
+    price, support, resistance = analyze(df)
+
+    st.success("✅ تم التحليل")
+
+    st.write("💰 السعر:", price)
+    st.write("🟢 الدعم:", support)
+    st.write("🔴 المقاومة:", resistance)
+
+    st.line_chart(df.set_index("time")["close"])
