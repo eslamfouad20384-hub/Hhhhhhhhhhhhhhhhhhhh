@@ -1,18 +1,21 @@
+import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
-import time
 
 # ==============================
-# إعدادات
+# إعداد الصفحة
 # ==============================
+st.set_page_config(layout="wide")
+st.title("🚀 Smart Crypto Scanner (Swing فرص)")
+
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
 CRYPTOCOMPARE_URL = "https://min-api.cryptocompare.com/data/v2/histohour"
 
 TOP_COINS = 100
 
 # ==============================
-# 1️⃣ جلب أفضل 100 عملة
+# جلب العملات
 # ==============================
 def get_top_coins():
     params = {
@@ -21,89 +24,77 @@ def get_top_coins():
         "per_page": TOP_COINS,
         "page": 1
     }
-    data = requests.get(COINGECKO_URL, params=params).json()
-    return [coin["symbol"].upper() for coin in data]
+
+    try:
+        res = requests.get(COINGECKO_URL, params=params, timeout=10)
+        data = res.json()
+
+        if not isinstance(data, list):
+            st.error("❌ مشكلة في الداتا من CoinGecko")
+            return []
+
+        return [coin["symbol"].upper() for coin in data]
+
+    except:
+        st.error("❌ فشل تحميل العملات")
+        return []
 
 # ==============================
-# 2️⃣ جلب بيانات السعر
+# بيانات السعر
 # ==============================
 def get_price_data(symbol):
-    params = {
-        "fsym": symbol,
-        "tsym": "USDT",
-        "limit": 100
-    }
-    res = requests.get(CRYPTOCOMPARE_URL, params=params).json()
+    try:
+        params = {
+            "fsym": symbol,
+            "tsym": "USDT",
+            "limit": 100
+        }
+        res = requests.get(CRYPTOCOMPARE_URL, params=params, timeout=10).json()
 
-    if "Data" not in res:
+        if "Data" not in res:
+            return None
+
+        df = pd.DataFrame(res["Data"]["Data"])
+        return df
+    except:
         return None
 
-    df = pd.DataFrame(res["Data"]["Data"])
-    return df
-
 # ==============================
-# 3️⃣ حساب RSI
+# المؤشرات
 # ==============================
-def calculate_rsi(df, period=14):
+def add_indicators(df):
+    # RSI
     delta = df["close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
-    return df
 
-# ==============================
-# 4️⃣ حساب MACD
-# ==============================
-def calculate_macd(df):
+    # MACD
     df["EMA12"] = df["close"].ewm(span=12).mean()
     df["EMA26"] = df["close"].ewm(span=26).mean()
     df["MACD"] = df["EMA12"] - df["EMA26"]
     df["Signal"] = df["MACD"].ewm(span=9).mean()
-    return df
 
-# ==============================
-# 5️⃣ حساب المتوسطات
-# ==============================
-def calculate_ma(df):
+    # MA
     df["MA100"] = df["close"].rolling(100).mean()
-    df["MA200"] = df["close"].rolling(200).mean()
+
     return df
 
 # ==============================
-# 6️⃣ Volume Spike
+# تحليل
 # ==============================
-def volume_spike(df):
-    avg_vol = df["volumeto"].rolling(20).mean()
-    return df["volumeto"].iloc[-1] > avg_vol.iloc[-1] * 1.5
-
-# ==============================
-# 7️⃣ RSI Divergence بسيط
-# ==============================
-def rsi_divergence(df):
-    if len(df) < 20:
-        return False
-    price_low1 = df["close"].iloc[-5]
-    price_low2 = df["close"].iloc[-1]
-    rsi_low1 = df["RSI"].iloc[-5]
-    rsi_low2 = df["RSI"].iloc[-1]
-
-    return price_low2 < price_low1 and rsi_low2 > rsi_low1
-
-# ==============================
-# 8️⃣ تحليل العملة
-# ==============================
-def analyze_coin(symbol):
+def analyze(symbol):
     df = get_price_data(symbol)
     if df is None or len(df) < 50:
         return None
 
-    df = calculate_rsi(df)
-    df = calculate_macd(df)
-    df = calculate_ma(df)
+    df = add_indicators(df)
 
     score = 0
     reasons = []
+
+    price = df["close"].iloc[-1]
 
     # RSI
     if df["RSI"].iloc[-1] < 30:
@@ -116,74 +107,57 @@ def analyze_coin(symbol):
         reasons.append("MACD Bullish")
 
     # Volume
-    if volume_spike(df):
+    avg_vol = df["volumeto"].rolling(20).mean().iloc[-1]
+    if df["volumeto"].iloc[-1] > avg_vol * 1.5:
         score += 2
         reasons.append("Volume Spike")
 
     # MA
-    price = df["close"].iloc[-1]
     if price > df["MA100"].iloc[-1]:
         score += 1
         reasons.append("Above MA100")
 
-    # Divergence
-    if rsi_divergence(df):
-        score += 3
-        reasons.append("RSI Divergence")
-
-    # فلترة الهبوط
-    change = (df["close"].iloc[-1] - df["close"].iloc[-24]) / df["close"].iloc[-24] * 100
-
+    # هبوط
+    change = (price - df["close"].iloc[-24]) / df["close"].iloc[-24] * 100
     if change > -5:
         return None
 
-    if score >= 5:
-        entry = price
-        target = price * 1.05
-        stop = price * 0.97
-
+    if score >= 4:
         return {
-            "symbol": symbol,
-            "score": score,
-            "entry": entry,
-            "target": target,
-            "stop": stop,
-            "reasons": reasons
+            "Symbol": symbol,
+            "Score": score,
+            "Entry": round(price, 4),
+            "Target": round(price * 1.05, 4),
+            "Stop": round(price * 0.97, 4),
+            "Reasons": ", ".join(reasons)
         }
 
     return None
 
 # ==============================
-# 9️⃣ تشغيل النظام
+# زرار التشغيل
 # ==============================
-def run_scanner():
-    coins = get_top_coins()
-    results = []
+if st.button("🔍 Scan السوق"):
+    with st.spinner("جارى البحث..."):
+        coins = get_top_coins()
+        results = []
 
-    for coin in coins:
-        try:
-            res = analyze_coin(coin)
+        progress = st.progress(0)
+
+        for i, coin in enumerate(coins):
+            res = analyze(coin)
             if res:
                 results.append(res)
-        except:
-            continue
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)
+            progress.progress((i + 1) / len(coins))
 
-    print("\n🔥 أفضل فرص سوينج:\n")
-    for r in results[:10]:
-        print(f"💰 {r['symbol']}")
-        print(f"Score: {r['score']}")
-        print(f"Entry: {r['entry']:.4f}")
-        print(f"Target: {r['target']:.4f}")
-        print(f"Stop: {r['stop']:.4f}")
-        print(f"Reasons: {', '.join(r['reasons'])}")
-        print("-" * 30)
+        if results:
+            df = pd.DataFrame(results)
+            df = df.sort_values(by="Score", ascending=False)
 
-# ==============================
-# 🔁 تشغيل مستمر
-# ==============================
-if __name__ == "__main__":
-    while True:
-        run_scanner()
-        time.sleep(300)  # كل 5 دقايق
+            st.success(f"🔥 تم العثور على {len(df)} فرصة")
+
+            st.dataframe(df, use_container_width=True)
+
+        else:
+            st.warning("❌ مفيش فرص حالياً")
