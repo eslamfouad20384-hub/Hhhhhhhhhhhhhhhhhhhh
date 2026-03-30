@@ -1,94 +1,62 @@
 import streamlit as st
-import requests
 import pandas as pd
 import numpy as np
+import requests
 
 # ==========================
 # UI
 # ==========================
 st.set_page_config(layout="wide")
-st.title("🚀 Bitcoin Smart Analyzer PRO")
+st.title("🚀 Bitcoin Analyzer PRO (Stable)")
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "1h"
-LIMIT = 50
+LIMIT = 100
 
 # ==========================
-# جلب البيانات من Binance
+# جلب البيانات (Stable API)
 # ==========================
 def get_data():
-    url = "https://api.binance.com/api/v3/klines"
+    try:
+        url = "https://api.binance.com/api/v3/klines"
 
-    params = {
-        "symbol": SYMBOL,
-        "interval": INTERVAL,
-        "limit": LIMIT
-    }
+        params = {
+            "symbol": SYMBOL,
+            "interval": INTERVAL,
+            "limit": LIMIT
+        }
 
-    data = requests.get(url, params=params).json()
+        res = requests.get(url, params=params, timeout=10)
 
-    df = pd.DataFrame(data, columns=[
-        "time","open","high","low","close","volume",
-        "close_time","qav","trades","tbbav","tbqav","ignore"
-    ])
+        if res.status_code != 200:
+            return pd.DataFrame()
 
-    df["close"] = df["close"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["open"] = df["open"].astype(float)
+        data = res.json()
 
-    return df
+        if not isinstance(data, list) or len(data) == 0:
+            return pd.DataFrame()
 
+        df = pd.DataFrame(data, columns=[
+            "time","open","high","low","close","volume",
+            "close_time","qav","trades","tbbav","tbqav","ignore"
+        ])
 
-# ==========================
-# Pivot Highs & Lows (قمم وقيعان)
-# ==========================
-def find_pivots(df, window=5):
-    highs = df["high"]
-    lows = df["low"]
+        df = df[["open","high","low","close","volume"]]
 
-    pivot_highs = []
-    pivot_lows = []
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
 
-    for i in range(window, len(df) - window):
-        if highs[i] == max(highs[i-window:i+window]):
-            pivot_highs.append(highs[i])
+        return df
 
-        if lows[i] == min(lows[i-window:i+window]):
-            pivot_lows.append(lows[i])
-
-    return pivot_highs, pivot_lows
+    except:
+        return pd.DataFrame()
 
 
 # ==========================
-# دعم ومقاومة (Clustering)
-# ==========================
-def get_support_resistance(pivots):
-    levels = pd.Series(pivots)
-
-    if len(levels) == 0:
-        return []
-
-    # تجميع مستويات قريبة
-    levels = levels.sort_values()
-    clusters = []
-
-    cluster = [levels.iloc[0]]
-
-    for price in levels[1:]:
-        if abs(price - np.mean(cluster)) / np.mean(cluster) < 0.01:
-            cluster.append(price)
-        else:
-            clusters.append(np.mean(cluster))
-            cluster = [price]
-
-    clusters.append(np.mean(cluster))
-
-    return sorted(clusters)
-
-
-# ==========================
-# RSI بسيط
+# RSI
 # ==========================
 def rsi(df, period=14):
     delta = df["close"].diff()
@@ -101,51 +69,94 @@ def rsi(df, period=14):
 
 
 # ==========================
-# تحليل كامل
+# دعم ومقاومة (Pivot)
+# ==========================
+def find_levels(df):
+    highs = df["high"]
+    lows = df["low"]
+
+    resistance = []
+    support = []
+
+    window = 5
+
+    for i in range(window, len(df) - window):
+        if highs[i] == max(highs[i-window:i+window]):
+            resistance.append(highs[i])
+
+        if lows[i] == min(lows[i-window:i+window]):
+            support.append(lows[i])
+
+    def cluster(levels):
+        if len(levels) == 0:
+            return []
+
+        levels = sorted(levels)
+        clusters = []
+        temp = [levels[0]]
+
+        for p in levels[1:]:
+            if abs(p - np.mean(temp)) / np.mean(temp) < 0.01:
+                temp.append(p)
+            else:
+                clusters.append(np.mean(temp))
+                temp = [p]
+
+        clusters.append(np.mean(temp))
+        return clusters
+
+    return cluster(support), cluster(resistance)
+
+
+# ==========================
+# تحليل
 # ==========================
 def analyze(df):
+
+    # 🚨 حماية من الفشل
+    if df is None or df.empty or len(df) < 20:
+        return None
+
     df["RSI"] = rsi(df)
 
     price = df["close"].iloc[-1]
 
-    pivot_highs, pivot_lows = find_pivots(df)
-
-    resistance = get_support_resistance(pivot_highs)
-    support = get_support_resistance(pivot_lows)
+    support, resistance = find_levels(df)
 
     nearest_support = max([s for s in support if s < price], default=None)
     nearest_resistance = min([r for r in resistance if r > price], default=None)
 
     rsi_now = df["RSI"].iloc[-1]
 
-    # ==========================
-    # توصية
-    # ==========================
     signal = "HOLD"
     reasons = []
 
-    if rsi_now < 30 and nearest_support:
+    # ==========================
+    # إشارات
+    # ==========================
+    if rsi_now < 30:
         signal = "BUY"
-        reasons.append("RSI Oversold + عند دعم قوي")
-
-    if nearest_resistance and price > nearest_resistance:
-        signal = "BREAKOUT"
-        reasons.append("اختراق مقاومة")
+        reasons.append("RSI Oversold")
 
     if rsi_now > 70:
-        signal = "SELL / TAKE PROFIT"
+        signal = "SELL"
         reasons.append("RSI Overbought")
+
+    if nearest_support and price <= nearest_support * 1.01:
+        signal = "BUY"
+        reasons.append("Near Support")
+
+    if nearest_resistance and price >= nearest_resistance:
+        signal = "BREAKOUT / SELL"
+        reasons.append("At Resistance")
 
     # ==========================
     # أهداف
     # ==========================
     target1 = nearest_resistance
-    target2 = None
+    target2 = nearest_resistance * 1.03 if nearest_resistance else None
 
-    if nearest_resistance:
-        target2 = nearest_resistance * 1.03
-
-    stop_loss = nearest_support if nearest_support else price * 0.95
+    stop_loss = nearest_support * 0.98 if nearest_support else price * 0.95
 
     return {
         "Price": price,
@@ -156,25 +167,24 @@ def analyze(df):
         "Target2": target2,
         "StopLoss": stop_loss,
         "Signal": signal,
-        "Reasons": ", ".join(reasons),
-        "Support Levels": support[:5],
-        "Resistance Levels": resistance[:5]
+        "Reasons": ", ".join(reasons)
     }
 
 
 # ==========================
 # تشغيل
 # ==========================
-if st.button("🔍 Analyze Bitcoin"):
-    df = get_data()
+df = get_data()
+
+if df.empty:
+    st.error("❌ No data from Binance API. Try again.")
+    st.stop()
+
+if st.button("🔍 Analyze BTC"):
     result = analyze(df)
 
-    st.subheader("📊 Current Analysis")
-
-    st.write(result)
-
-    st.subheader("📉 Support Levels")
-    st.write(result["Support Levels"])
-
-    st.subheader("📈 Resistance Levels")
-    st.write(result["Resistance Levels"])
+    if result is None:
+        st.warning("⚠️ Not enough data to analyze")
+    else:
+        st.subheader("📊 Analysis Result")
+        st.write(result)
