@@ -1,188 +1,140 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
 
-# ==========================
-# UI
-# ==========================
-st.set_page_config(layout="wide")
-st.title("🚀 Bitcoin Analyzer PRO MAX")
+# =========================
+# 1️⃣ تنظيف البيانات
+# =========================
+def clean_binance_data(raw_data):
+    cols = [
+        "time","open","high","low","close","volume",
+        "close_time","qav","trades","tb_base","tb_quote","ignore"
+    ]
 
-SYMBOL = "BTCUSDT"
-INTERVAL = "1h"
-LIMIT = 100
+    df = pd.DataFrame(raw_data, columns=cols)
 
-# ==========================
-# Get Data (Stable)
-# ==========================
-def get_data():
-    try:
-        url = "https://api.binance.com/api/v3/klines"
+    for c in ["open","high","low","close","volume"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
 
-        params = {
-            "symbol": SYMBOL,
-            "interval": INTERVAL,
-            "limit": LIMIT
-        }
+    df.dropna(inplace=True)
+    df["time"] = pd.to_datetime(df["time"], unit="ms")
+    df.sort_values("time", inplace=True)
+    df.reset_index(drop=True, inplace=True)
 
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-
-        res = requests.get(url, params=params, headers=headers, timeout=10)
-
-        if res.status_code != 200:
-            return pd.DataFrame()
-
-        data = res.json()
-
-        if not isinstance(data, list) or len(data) == 0:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(data, columns=[
-            "time","open","high","low","close","volume",
-            "close_time","qav","trades","tbbav","tbqav","ignore"
-        ])
-
-        df = df[["open","high","low","close","volume"]]
-
-        df = df.astype(float)
-
-        return df
-
-    except:
-        return pd.DataFrame()
+    return df
 
 
-# ==========================
-# RSI
-# ==========================
-def rsi(df, period=14):
-    delta = df["close"].diff()
-
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = -delta.clip(upper=0).rolling(period).mean()
+# =========================
+# 2️⃣ RSI
+# =========================
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
 
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
 
-# ==========================
-# Support / Resistance
-# ==========================
-def support_resistance(df):
-    highs = df["high"]
-    lows = df["low"]
-
-    window = 5
-    pivots_high = []
-    pivots_low = []
-
-    for i in range(window, len(df) - window):
-        if highs[i] == max(highs[i-window:i+window]):
-            pivots_high.append(highs[i])
-
-        if lows[i] == min(lows[i-window:i+window]):
-            pivots_low.append(lows[i])
-
-    def cluster(levels):
-        if len(levels) == 0:
-            return []
-
-        levels = sorted(levels)
-        clusters = [levels[0]]
-        temp = [levels[0]]
-
-        for p in levels[1:]:
-            if abs(p - np.mean(temp)) / np.mean(temp) < 0.01:
-                temp.append(p)
-            else:
-                clusters.append(np.mean(temp))
-                temp = [p]
-
-        clusters.append(np.mean(temp))
-        return clusters
-
-    return cluster(pivots_low), cluster(pivots_high)
+# =========================
+# 3️⃣ MACD
+# =========================
+def macd(series):
+    ema12 = series.ewm(span=12, adjust=False).mean()
+    ema26 = series.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal = macd_line.ewm(span=9, adjust=False).mean()
+    hist = macd_line - signal
+    return macd_line, signal, hist
 
 
-# ==========================
-# Analysis Engine
-# ==========================
-def analyze(df):
+# =========================
+# 4️⃣ تحليل سكالبينج برو
+# =========================
+def scalping_analyze(df):
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
 
-    # 🚨 حماية كاملة
-    if df is None or df.empty or len(df) < 20:
-        return None
+    price = close.iloc[-1]
 
-    df["RSI"] = rsi(df)
+    # Indicators
+    df["rsi"] = rsi(close)
+    macd_line, macd_signal, macd_hist = macd(close)
 
-    price = df["close"].iloc[-1]
-    rsi_now = df["RSI"].iloc[-1]
+    rsi_val = df["rsi"].iloc[-1]
+    macd_val = macd_line.iloc[-1]
+    macd_sig = macd_signal.iloc[-1]
 
-    support, resistance = support_resistance(df)
+    # Trend EMA
+    ema20 = close.ewm(span=20).mean().iloc[-1]
+    ema50 = close.ewm(span=50).mean().iloc[-1]
 
-    nearest_support = max([s for s in support if s < price], default=None)
-    nearest_resistance = min([r for r in resistance if r > price], default=None)
+    trend = "UP" if ema20 > ema50 else "DOWN"
 
-    signal = "HOLD"
-    reasons = []
+    # Support / Resistance (ديناميكي سكالبينج)
+    support = low.tail(20).min()
+    resistance = high.tail(20).max()
 
-    # ==========================
-    # إشارات قوية
-    # ==========================
-    if rsi_now < 30:
-        signal = "BUY"
-        reasons.append("RSI Oversold")
+    # Volatility
+    atr = (high - low).rolling(14).mean().iloc[-1]
 
-    if rsi_now > 70:
-        signal = "SELL"
-        reasons.append("RSI Overbought")
+    # =========================
+    # 5️⃣ SCORE SYSTEM
+    # =========================
+    score = 50
 
-    if nearest_support and price <= nearest_support * 1.01:
-        signal = "BUY"
-        reasons.append("Near Support Zone")
+    # RSI rules
+    if rsi_val < 30:
+        score += 20
+    elif rsi_val > 70:
+        score -= 20
 
-    if nearest_resistance and price >= nearest_resistance:
-        signal = "BREAKOUT / SELL"
-        reasons.append("At Resistance")
+    # MACD rules
+    if macd_val > macd_sig:
+        score += 15
+    else:
+        score -= 15
 
-    # ==========================
-    # أهداف
-    # ==========================
-    target1 = nearest_resistance
-    target2 = nearest_resistance * 1.03 if nearest_resistance else None
+    # Trend rules
+    if trend == "UP":
+        score += 15
+    else:
+        score -= 15
 
-    stop_loss = nearest_support * 0.98 if nearest_support else price * 0.95
+    # Position rules
+    if price <= support * 1.01:
+        score += 10
+    if price >= resistance * 0.99:
+        score -= 10
+
+    # clamp
+    score = max(0, min(100, score))
+
+    # =========================
+    # 6️⃣ Signal
+    # =========================
+    if score >= 75:
+        signal = "BUY 🚀 (Scalp Long)"
+    elif score <= 35:
+        signal = "SELL 🔻 (Scalp Short)"
+    else:
+        signal = "WAIT ⏳"
+
+    # Targets
+    target1 = price + atr
+    target2 = price + (atr * 2)
+    stop_loss = price - atr
 
     return {
-        "Price": round(price, 2),
-        "RSI": round(rsi_now, 2),
-        "Support": nearest_support,
-        "Resistance": nearest_resistance,
-        "Target1": target1,
-        "Target2": target2,
-        "StopLoss": stop_loss,
-        "Signal": signal,
-        "Reasons": ", ".join(reasons)
+        "price": price,
+        "support": support,
+        "resistance": resistance,
+        "rsi": rsi_val,
+        "macd": macd_val,
+        "trend": trend,
+        "score": score,
+        "signal": signal,
+        "target1": target1,
+        "target2": target2,
+        "stop_loss": stop_loss
     }
-
-
-# ==========================
-# Run
-# ==========================
-df = get_data()
-
-if df.empty:
-    st.error("❌ No data from Binance API")
-    st.stop()
-
-if st.button("🔍 Analyze BTC"):
-    result = analyze(df)
-
-    if result is None:
-        st.warning("⚠️ Not enough data for analysis")
-    else:
-        st.success("🔥 Analysis Ready")
-        st.json(result)
